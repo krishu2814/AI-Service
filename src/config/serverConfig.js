@@ -19,4 +19,7 @@ module.exports = {
     process.env.SECRET_TOKEN ||
     process.env.JWT_SECRET ||
     "ecommerce_jwt_secret_dev_key",
+  GROQ_API_KEY: process.env.GROQ_API_KEY || process.env.LLM_API_KEY || "",
+  LLM_MODEL: process.env.LLM_MODEL || "llama-3.3-70b-versatile",
+  LLM_BASE_URL: process.env.LLM_BASE_URL || "https://api.groq.com/openai/v1",
 };
