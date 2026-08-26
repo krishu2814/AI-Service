@@ -118,7 +118,7 @@ class ToolExecutor {
       }
 
       const response = await axios.get(
-        `${INVENTORY_SERVICE_URL}/api/v1/${productId}`,
+        `${INVENTORY_SERVICE_URL}/api/v1/inventory/${productId}`,
         {
           headers: this._getHeaders(),
           timeout: this.timeout,
