@@ -30,4 +30,29 @@ const AuthenticUser = async (req, res, next) => {
   }
 };
 
+const OptionalAuth = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (authHeader) {
+      const token = authHeader.startsWith("Bearer ")
+        ? authHeader.split(" ")[1]
+        : authHeader;
+      try {
+        const decoded = jwt.verify(token, SECRET_TOKEN);
+        req.user = decoded;
+      } catch (e) {
+        req.user = { id: "anonymous_user", role: "customer" };
+      }
+    } else {
+      req.user = { id: "anonymous_user", role: "customer" };
+    }
+    next();
+  } catch (error) {
+    req.user = { id: "anonymous_user", role: "customer" };
+    next();
+  }
+};
+
 module.exports = AuthenticUser;
+module.exports.AuthenticUser = AuthenticUser;
+module.exports.OptionalAuth = OptionalAuth;
