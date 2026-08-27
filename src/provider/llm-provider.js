@@ -231,8 +231,15 @@ class LLMProvider {
     }
 
     // Default conversational response
+    const conversationalResponses = [
+      "Hey! 👋 Welcome! I'm your AI Shopping Assistant. What can I help you find today?",
+      "Hello! How can I assist you with your shopping today?",
+      "Hi there! Feel free to ask me for product recommendations, inventory checks, or help with your cart and orders.",
+    ];
+    const randomReply = conversationalResponses[Math.floor(Math.random() * conversationalResponses.length)];
+
     return {
-      content: `Hello! I am your AI Shopping Assistant. How can I help you find products, check warehouse availability, or manage your orders today?`,
+      content: randomReply,
       role: "assistant",
       toolCalls: null,
       usage: { prompt_tokens: 20, completion_tokens: 30, total_tokens: 50 },
