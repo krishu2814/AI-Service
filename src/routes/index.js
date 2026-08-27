@@ -3,5 +3,7 @@ const router = express.Router();
 const apiV1Routes = require("./v1/index");
 
 router.use("/v1", apiV1Routes);
+router.use("/", apiV1Routes);
 
 module.exports = router;
+
