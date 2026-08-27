@@ -17,7 +17,7 @@ class ToolExecutor {
     const correlationId = getCorrelationId();
     const headers = {
       "Content-Type": "application/json",
-      "x-correlation-id": correlationId,
+      "x-correlation-id": correlationId || `corr-${Date.now()}`,
     };
     if (token) {
       headers["Authorization"] = token.startsWith("Bearer ")
@@ -33,8 +33,8 @@ class ToolExecutor {
       const params = {};
       if (query) params.search = query;
       if (category) params.category = category;
-      if (minPrice !== undefined) params.minPrice = minPrice;
-      if (maxPrice !== undefined) params.maxPrice = maxPrice;
+      if (minPrice !== undefined && !isNaN(minPrice)) params.minPrice = minPrice;
+      if (maxPrice !== undefined && !isNaN(maxPrice)) params.maxPrice = maxPrice;
       if (limit) params.limit = limit;
 
       const response = await axios.get(`${PRODUCT_SERVICE_URL}/api/v1`, {
@@ -46,6 +46,7 @@ class ToolExecutor {
       const products = response.data?.data || [];
       return {
         success: true,
+        status: "SUCCESS",
         count: products.length,
         products: products.map((p) => ({
           id: p._id || p.id,
@@ -54,15 +55,17 @@ class ToolExecutor {
           price: p.price,
           category: p.category,
           brand: p.brand || "",
-          inStock: p.stock > 0,
-          stock: p.stock,
+          inStock: (p.stock || 0) > 0,
+          stock: p.stock || 0,
+          rating: p.rating || 4.5,
         })),
       };
     } catch (error) {
       console.warn("[Tool searchProducts error]:", error.message);
       return {
         success: false,
-        error: error.response?.data?.message || error.message,
+        status: "SERVICE_UNAVAILABLE",
+        error: "Product service is temporarily unreachable or returning errors.",
         products: [],
       };
     }
@@ -72,7 +75,7 @@ class ToolExecutor {
     try {
       const { productId } = args;
       if (!productId) {
-        return { success: false, error: "productId parameter is required" };
+        return { success: false, status: "INVALID_ARGS", error: "productId parameter is required" };
       }
 
       const response = await axios.get(
@@ -85,11 +88,12 @@ class ToolExecutor {
 
       const p = response.data?.data;
       if (!p) {
-        return { success: false, error: "Product not found" };
+        return { success: false, status: "NOT_FOUND", error: "Product not found" };
       }
 
       return {
         success: true,
+        status: "SUCCESS",
         product: {
           id: p._id || p.id,
           name: p.name,
@@ -97,7 +101,7 @@ class ToolExecutor {
           price: p.price,
           category: p.category,
           brand: p.brand || "",
-          stock: p.stock,
+          stock: p.stock || 0,
           rating: p.rating || 0,
         },
       };
@@ -105,7 +109,8 @@ class ToolExecutor {
       console.warn(`[Tool getProduct error for ${args.productId}]:`, error.message);
       return {
         success: false,
-        error: error.response?.data?.message || "Product not found or unavailable",
+        status: error.response?.status === 404 ? "NOT_FOUND" : "SERVICE_UNAVAILABLE",
+        error: error.response?.data?.message || "Product information unavailable",
       };
     }
   }
@@ -114,7 +119,7 @@ class ToolExecutor {
     try {
       const { productId } = args;
       if (!productId) {
-        return { success: false, error: "productId parameter is required" };
+        return { success: false, status: "INVALID_ARGS", error: "productId parameter is required" };
       }
 
       const response = await axios.get(
@@ -129,6 +134,7 @@ class ToolExecutor {
       if (!inv) {
         return {
           success: true,
+          status: "SUCCESS",
           productId,
           availableQuantity: 0,
           inStock: false,
@@ -145,17 +151,19 @@ class ToolExecutor {
 
       return {
         success: true,
-        productId: inv.productId,
+        status: "SUCCESS",
+        productId: inv.productId || productId,
         quantity,
         availableQuantity,
         reservedQuantity,
-        inStock: quantity > 0,
+        inStock: availableQuantity > 0,
       };
     } catch (error) {
       console.warn(`[Tool getInventory error for ${args.productId}]:`, error.message);
       return {
         success: false,
-        error: error.response?.data?.message || "Inventory lookup unavailable",
+        status: "SERVICE_UNAVAILABLE",
+        error: "Warehouse inventory lookup temporarily unavailable.",
       };
     }
   }
@@ -164,7 +172,11 @@ class ToolExecutor {
     try {
       const token = context.token;
       if (!token) {
-        return { success: false, error: "Authentication token required to view user cart" };
+        return {
+          success: false,
+          status: "UNAUTHORIZED",
+          error: "Guest user. Authentication token required to view user shopping cart.",
+        };
       }
 
       const response = await axios.get(`${CART_SERVICE_URL}/api/v1`, {
@@ -175,13 +187,15 @@ class ToolExecutor {
       const cart = response.data?.data;
       return {
         success: true,
+        status: "SUCCESS",
         cart: cart || { items: [] },
       };
     } catch (error) {
       console.warn("[Tool getCart error]:", error.message);
       return {
         success: false,
-        error: error.response?.data?.message || "Cart lookup unavailable",
+        status: error.response?.status === 401 ? "UNAUTHORIZED" : "SERVICE_UNAVAILABLE",
+        error: error.response?.data?.message || "Shopping cart lookup unavailable",
       };
     }
   }
@@ -190,7 +204,11 @@ class ToolExecutor {
     try {
       const token = context.token;
       if (!token) {
-        return { success: false, error: "Authentication token required to view user orders" };
+        return {
+          success: false,
+          status: "UNAUTHORIZED",
+          error: "Guest user. Authentication token required to view order history.",
+        };
       }
 
       const response = await axios.get(`${ORDER_SERVICE_URL}/api/v1`, {
@@ -203,6 +221,7 @@ class ToolExecutor {
 
       return {
         success: true,
+        status: "SUCCESS",
         count: orders.length,
         orders: orders.slice(0, limit).map((o) => ({
           orderId: o._id || o.id,
@@ -217,7 +236,8 @@ class ToolExecutor {
       console.warn("[Tool getUserOrders error]:", error.message);
       return {
         success: false,
-        error: error.response?.data?.message || "Orders lookup unavailable",
+        status: error.response?.status === 401 ? "UNAUTHORIZED" : "SERVICE_UNAVAILABLE",
+        error: error.response?.data?.message || "Order history lookup unavailable",
       };
     }
   }
@@ -227,10 +247,14 @@ class ToolExecutor {
       const { orderId } = args;
       const token = context.token;
       if (!orderId) {
-        return { success: false, error: "orderId parameter is required" };
+        return { success: false, status: "INVALID_ARGS", error: "orderId parameter is required" };
       }
       if (!token) {
-        return { success: false, error: "Authentication token required to view order details" };
+        return {
+          success: false,
+          status: "UNAUTHORIZED",
+          error: "Guest user. Authentication token required to view specific order details.",
+        };
       }
 
       const response = await axios.get(`${ORDER_SERVICE_URL}/api/v1/${orderId}`, {
@@ -240,11 +264,12 @@ class ToolExecutor {
 
       const order = response.data?.data;
       if (!order) {
-        return { success: false, error: `Order ${orderId} not found` };
+        return { success: false, status: "NOT_FOUND", error: `Order ${orderId} not found` };
       }
 
       return {
         success: true,
+        status: "SUCCESS",
         order: {
           orderId: order._id || order.id,
           orderStatus: order.orderStatus,
@@ -260,7 +285,8 @@ class ToolExecutor {
       console.warn(`[Tool getOrderDetails error for ${args.orderId}]:`, error.message);
       return {
         success: false,
-        error: error.response?.data?.message || "Order not found or inaccessible",
+        status: error.response?.status === 404 ? "NOT_FOUND" : "SERVICE_UNAVAILABLE",
+        error: error.response?.data?.message || "Order details lookup unavailable",
       };
     }
   }
@@ -270,7 +296,7 @@ class ToolExecutor {
       const { paymentId } = args;
       const token = context.token;
       if (!paymentId) {
-        return { success: false, error: "paymentId parameter is required" };
+        return { success: false, status: "INVALID_ARGS", error: "paymentId parameter is required" };
       }
 
       const response = await axios.get(`${PAYMENT_SERVICE_URL}/api/v1/${paymentId}`, {
@@ -281,13 +307,15 @@ class ToolExecutor {
       const payment = response.data?.data;
       return {
         success: true,
+        status: "SUCCESS",
         payment: payment || null,
       };
     } catch (error) {
       console.warn(`[Tool getPaymentDetails error for ${args.paymentId}]:`, error.message);
       return {
         success: false,
-        error: error.response?.data?.message || "Payment details unavailable",
+        status: "SERVICE_UNAVAILABLE",
+        error: error.response?.data?.message || "Payment verification unavailable",
       };
     }
   }

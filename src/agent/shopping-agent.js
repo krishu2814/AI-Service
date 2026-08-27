@@ -23,6 +23,7 @@ class ShoppingAgent {
     temperature = 0.2,
   }) {
     const userId = userContext.userId || "anonymous_user";
+    const token = userContext.token || null;
     const activeSessionId = sessionId || `session_${crypto.randomUUID()}`;
 
     // 1. Retrieve or initialize chat session from MongoDB (ecommerce_ai)
@@ -36,8 +37,8 @@ class ShoppingAgent {
       });
     }
 
-    // 2. Build conversation history for LLM (sliding window of last 10 messages)
-    const recentMessages = (session.messages || []).slice(-10).map((m) => {
+    // 2. Build sliding window conversation memory (last 12 messages)
+    const recentMessages = (session.messages || []).slice(-12).map((m) => {
       const msgObj = {
         role: m.role,
         content: m.content || "",
@@ -54,34 +55,56 @@ class ShoppingAgent {
       return msgObj;
     });
 
-    // 3. Prepare system instruction & user prompt
+    // 3. System Prompt - Advanced AI Shopping Assistant Directives
+    const isGuest = userId === "anonymous_user";
     const systemPrompt = {
       role: "system",
-      content: `You are an AI Shopping Assistant for an e-commerce platform.
+      content: `You are an expert AI Shopping Assistant for an e-commerce platform.
 
-Your job is to help users naturally through conversation and assist them with shopping-related tasks.
+User Authentication Context:
+- User Status: ${isGuest ? "GUEST_VISITOR (Not signed in)" : `AUTHENTICATED_CUSTOMER (User ID: ${userId})`}
 
-Capabilities & Tools Available:
-- Recommend products and search the product catalog ('searchProducts', 'getProduct')
-- Check warehouse stock and inventory ('getInventory')
-- View active shopping cart items ('getCart')
-- Review order history and details ('getUserOrders', 'getOrderDetails')
+CORE RESPONSIBILITIES:
+1. CASUAL CONVERSATION & GREETINGS:
+   - For greetings, pleasantries, or general queries (e.g. "hi", "hello", "hey", "good morning", "how are you", "who are you", "what can you do", "thanks", "bye", "cool", "ok"):
+     • Respond naturally, concisely, and conversationally as a helpful assistant.
+     • DO NOT call any tool when tools are unnecessary (0 tool calls).
+     • DO NOT state, claim, or imply that you searched the catalog unless a search tool was executed in this conversation.
 
-CONVERSATIONAL & TOOL-ROUTING GUIDELINES:
-1. FOR GENERAL CONVERSATION, GREETINGS, ACKNOWLEDGEMENTS, OR CASUAL QUESTIONS (e.g. "hi", "hello", "hey", "good morning", "how are you", "who are you", "what can you do", "thanks", "bye", "cool", "okay"):
-   - Respond naturally, conversationally, and concisely as a friendly AI shopping assistant.
-   - DO NOT call any tool when a tool is unnecessary.
-   - DO NOT claim, state, or pretend that you searched the catalog or database unless a tool call was actually executed.
+2. SHOPPING DATA & TOOL EXECUTION:
+   - When the user asks for store data (searching products, specifications, inventory, cart, or orders), call the appropriate tool:
+     • 'searchProducts': Search catalog by query, category, minPrice, maxPrice, or limit.
+     • 'getProduct': Get full specs for a single product by ID.
+     • 'getInventory': Check real-time physical warehouse stock for a product.
+     • 'getCart': View shopping cart (requires signed-in user).
+     • 'getUserOrders': View user order history (requires signed-in user).
+     • 'getOrderDetails': View status & items for a specific order ID.
+     • 'getPaymentDetails': Verify payment status.
 
-2. FOR TASKS REQUIRING LIVE APPLICATION DATA (e.g. searching products, looking up stock, inspecting cart, tracking orders):
-   - Use the appropriate tool call to fetch verified data.
-   - NEVER invent or fabricate product prices, specifications, stock levels, order statuses, or discount details.
-   - If a tool search returns no items or 0 stock, clearly inform the customer based strictly on the tool result.
+3. BUDGET & CURRENCY EXPRESSIONS:
+   - Parse budget phrases accurately into numeric minPrice/maxPrice parameters:
+     • 'under ₹60,000' or 'below 60000' or '60k' -> maxPrice: 60000
+     • 'under $1000' or 'below $1000' -> maxPrice: 1000
+     • 'between 40k and 60k' -> minPrice: 40000, maxPrice: 60000
 
-3. CONVERSATIONAL MEMORY & CONTEXT:
-   - Maintain context from previous messages in the conversation (e.g. if the user previously asked for laptops and then asks "which one is cheapest?", refer to the laptops from the previous turn).
+4. MULTI-TURN CONTEXT & REFERENCE RESOLUTION:
+   - Resolve context from previous conversation turns:
+     • "which one is cheapest?" -> Analyze products listed in previous turn and identify the one with lowest price.
+     • "is it in stock?" -> Check inventory for the specific product discussed in the previous turn.
+     • "compare the top two" -> Generate a Markdown specs comparison table for the top 2 products previously listed.
 
-Be concise, friendly, helpful, and natural.`,
+5. ACCURACY & ZERO HALLUCINATION GUARANTEE:
+   - NEVER invent or fabricate products, prices, stock quantities, order IDs, discount codes, or tracking statuses.
+   - If a tool returns no matches ('count: 0'), suggest useful options (e.g., widening budget or trying another category).
+   - If a microservice is offline or fails ('SERVICE_UNAVAILABLE'), explain clearly: "I'm currently unable to reach our product catalog / system. Please try again shortly."
+   - If a guest user asks to view cart or orders, explain politely: "Please sign in to view your shopping cart or order history."
+
+6. RECOMMENDATION QUALITY & FORMATTING:
+   - When presenting products, format them clearly:
+     1. **Product Name** - Price
+        • Key Spec / Specs
+        • Why recommended
+   - Be friendly, professional, concise, and helpful.`,
     };
 
     const userMessageObj = {
@@ -108,7 +131,7 @@ Be concise, friendly, helpful, and natural.`,
     let finalReply = "";
     let finalModel = "";
 
-    // 4. Autonomous Tool-Calling / ReAct Execution Loop
+    // 4. ReAct Reasoning Loop
     while (iterations < this.maxToolIterations) {
       iterations++;
 
@@ -120,7 +143,6 @@ Be concise, friendly, helpful, and natural.`,
 
       finalModel = llmResult.model;
 
-      // Check if LLM requested one or more tool calls
       if (llmResult.toolCalls && llmResult.toolCalls.length > 0) {
         const assistantToolCallMsg = {
           role: "assistant",
@@ -136,7 +158,7 @@ Be concise, friendly, helpful, and natural.`,
           timestamp: new Date(),
         });
 
-        // Execute each tool call requested by the model
+        // Execute each requested tool call
         for (const toolCall of llmResult.toolCalls) {
           const toolName = toolCall.function?.name;
           let toolArgs = {};
@@ -151,11 +173,11 @@ Be concise, friendly, helpful, and natural.`,
             args: toolArgs,
           });
 
-          // Execute tool with user's JWT and correlation tracking
+          // Execute tool with context (including JWT token and user ID)
           const toolExecResult = await this.toolService.executeTool(
             toolName,
             toolArgs,
-            userContext,
+            { ...userContext, token },
           );
 
           const toolResultMsg = {
@@ -176,7 +198,7 @@ Be concise, friendly, helpful, and natural.`,
           });
         }
       } else {
-        // Model produced final conversational response
+        // Model generated final assistant response
         finalReply = llmResult.content || "I have processed your request.";
         messagesToPersist.push({
           role: "assistant",
@@ -189,11 +211,11 @@ Be concise, friendly, helpful, and natural.`,
 
     if (!finalReply) {
       finalReply = toolsUsed.length > 0
-        ? "I retrieved the requested information from our catalog and system."
+        ? "I retrieved the requested information from our catalog."
         : "How can I help you with your shopping today?";
     }
 
-    // 5. Persist dialogue turn into MongoDB (ecommerce_ai)
+    // 5. Save dialogue turn to MongoDB
     await this.sessionRepo.appendMessages(
       activeSessionId,
       userId,

@@ -8,9 +8,18 @@ const {
 class LLMProvider {
   constructor(config = {}) {
     this.apiKey = config.apiKey || GROQ_API_KEY;
-    this.model = config.model || LLM_MODEL;
+    this.model = config.model || LLM_MODEL || "openai/gpt-oss-120b";
     this.baseURL = config.baseURL || LLM_BASE_URL;
     this.timeout = config.timeout || 12000; // 12s timeout protection
+    
+    // Multi-model fallback chain for high availability and rate limit resilience
+    this.fallbackModels = Array.from(new Set([
+      this.model,
+      "openai/gpt-oss-120b",
+      "openai/gpt-oss-20b",
+      "qwen/qwen3.6-27b",
+      "llama-3.3-70b-versatile"
+    ])).filter(Boolean);
   }
 
   async chatCompletion({
@@ -25,65 +34,70 @@ class LLMProvider {
       return this._generateMockResponse(messages, tools);
     }
 
-    try {
-      const payload = {
-        model: this.model,
-        messages,
-        temperature,
-        max_tokens: maxTokens,
-      };
+    let lastError = null;
 
-      if (tools && Array.isArray(tools) && tools.length > 0) {
-        payload.tools = tools;
-        payload.tool_choice = toolChoice;
-      }
+    for (const currentModel of this.fallbackModels) {
+      try {
+        const payload = {
+          model: currentModel,
+          messages,
+          temperature,
+          max_tokens: maxTokens,
+        };
 
-      const response = await axios.post(
-        `${this.baseURL}/chat/completions`,
-        payload,
-        {
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            "Content-Type": "application/json",
+        if (tools && Array.isArray(tools) && tools.length > 0) {
+          payload.tools = tools;
+          payload.tool_choice = toolChoice;
+        }
+
+        const response = await axios.post(
+          `${this.baseURL}/chat/completions`,
+          payload,
+          {
+            headers: {
+              Authorization: `Bearer ${this.apiKey}`,
+              "Content-Type": "application/json",
+            },
+            timeout: this.timeout,
           },
-          timeout: this.timeout,
-        },
-      );
+        );
 
-      const choice = response.data?.choices?.[0];
-      if (!choice) {
-        throw new Error("Invalid response format received from LLM provider");
+        const choice = response.data?.choices?.[0];
+        if (!choice) {
+          throw new Error("Invalid response format received from LLM provider");
+        }
+
+        return {
+          content: choice.message?.content || "",
+          role: choice.message?.role || "assistant",
+          toolCalls: choice.message?.tool_calls || null,
+          usage: response.data?.usage || {},
+          model: response.data?.model || currentModel,
+          isMock: false,
+        };
+      } catch (error) {
+        lastError = error;
+        const status = error.response?.status;
+        const errorDetail = error.response?.data?.error?.message || error.message;
+
+        console.warn(`[LLMProvider Warning] Model '${currentModel}' failed (Status: ${status || "N/A"}): ${errorDetail}. Attempting fallback...`);
+
+        // If error is unrecoverable auth error (401), stop model rotation immediately
+        if (status === 401) {
+          throw new Error("Invalid or expired LLM API credentials.");
+        }
       }
-
-      return {
-        content: choice.message?.content || "",
-        role: choice.message?.role || "assistant",
-        toolCalls: choice.message?.tool_calls || null,
-        usage: response.data?.usage || {},
-        model: response.data?.model || this.model,
-        isMock: false,
-      };
-    } catch (error) {
-      if (error.code === "ECONNABORTED" || error.message.includes("timeout")) {
-        console.error("[LLMProvider Error] LLM request timed out after", this.timeout, "ms");
-        throw new Error("AI provider request timed out. Please try again shortly.");
-      }
-
-      const status = error.response?.status;
-      const errorDetail = error.response?.data?.error?.message || error.message;
-
-      console.error(`[LLMProvider Error] Status: ${status || "N/A"}, Detail: ${errorDetail}`);
-
-      if (status === 401) {
-        throw new Error("Invalid or expired LLM API credentials.");
-      } else if (status === 429) {
-        throw new Error("AI provider rate limit exceeded. Please retry in a few seconds.");
-      } else if (status >= 500) {
-        throw new Error("AI provider is temporarily unavailable. Please try again later.");
-      }
-
-      throw new Error(`AI generation failed: ${errorDetail}`);
     }
+
+    // If all models in the fallback chain fail, check error status
+    const finalStatus = lastError?.response?.status;
+    const finalDetail = lastError?.response?.data?.error?.message || lastError?.message;
+
+    if (finalStatus === 429) {
+      throw new Error("AI provider rate limit exceeded across all models. Please retry in a few seconds.");
+    }
+
+    throw new Error(`AI generation failed across multi-model chain: ${finalDetail}`);
   }
 
   _generateMockResponse(messages, tools) {
@@ -206,7 +220,6 @@ class LLMProvider {
         lastUserText.includes("under") ||
         lastUserText.includes("product")
       ) {
-        // Extract search query
         let query = lastUserText.replace(/(find|search|for|a|an|me|under|\$|\d+)/gi, "").trim();
         if (!query) query = "laptop";
 
@@ -230,7 +243,6 @@ class LLMProvider {
       }
     }
 
-    // Default conversational response
     const conversationalResponses = [
       "Hey! 👋 Welcome! I'm your AI Shopping Assistant. What can I help you find today?",
       "Hello! How can I assist you with your shopping today?",
