@@ -1,6 +1,7 @@
 const LLMService = require("../service/llm-service");
 const ToolService = require("../service/tool-service");
 const ShoppingAgent = require("../agent/shopping-agent");
+const { BadRequestError, NotFoundError } = require("../utils/errors/app-error");
 
 class AIController {
   constructor() {
@@ -38,17 +39,12 @@ class AIController {
     });
   }
 
-  async directChat(req, res) {
+  async directChat(req, res, next) {
     try {
       const { message, history, systemPrompt, temperature, maxTokens } = req.body;
 
       if (!message) {
-        return res.status(400).json({
-          success: false,
-          data: {},
-          message: "Request body must include a 'message' string",
-          error: "ValidationError",
-        });
+        return next(new BadRequestError("Request body must include a 'message' string"));
       }
 
       const response = await this.llmService.generateChatResponse({
@@ -66,13 +62,7 @@ class AIController {
         error: {},
       });
     } catch (error) {
-      console.error("[AIController directChat Error]:", error.message);
-      return res.status(500).json({
-        success: false,
-        data: {},
-        message: "Failed to generate AI response",
-        error: error.message,
-      });
+      return next(error);
     }
   }
 
@@ -88,17 +78,12 @@ class AIController {
     });
   }
 
-  async executeTool(req, res) {
+  async executeTool(req, res, next) {
     try {
       const { toolName, args = {} } = req.body;
 
       if (!toolName) {
-        return res.status(400).json({
-          success: false,
-          data: {},
-          message: "Request body must include 'toolName'",
-          error: "ValidationError",
-        });
+        return next(new BadRequestError("Request body must include 'toolName'"));
       }
 
       const userContext = {
@@ -121,13 +106,7 @@ class AIController {
         error: {},
       });
     } catch (error) {
-      console.error("[AIController executeTool Error]:", error.message);
-      return res.status(500).json({
-        success: false,
-        data: {},
-        message: `Failed to execute tool: ${error.message}`,
-        error: error.message,
-      });
+      return next(error);
     }
   }
 
@@ -135,17 +114,12 @@ class AIController {
   // PHASE 4: SHOPPING AGENT CONTROLLER METHODS
   // ==========================================
 
-  async agentChat(req, res) {
+  async agentChat(req, res, next) {
     try {
       const { message, sessionId, temperature } = req.body;
 
       if (!message || typeof message !== "string" || message.trim().length === 0) {
-        return res.status(400).json({
-          success: false,
-          data: {},
-          message: "Request body must include a valid non-empty 'message' string",
-          error: "ValidationError",
-        });
+        return next(new BadRequestError("Request body must include a valid non-empty 'message' string"));
       }
 
       const userContext = {
@@ -170,17 +144,11 @@ class AIController {
         error: {},
       });
     } catch (error) {
-      console.error("[AIController agentChat Error]:", error.message);
-      return res.status(500).json({
-        success: false,
-        data: {},
-        message: "Failed to process shopping agent request",
-        error: error.message,
-      });
+      return next(error);
     }
   }
 
-  async getUserSessions(req, res) {
+  async getUserSessions(req, res, next) {
     try {
       const userId = req.user?.id || req.user?._id || req.headers["x-user-id"];
       const limit = parseInt(req.query.limit) || 20;
@@ -198,17 +166,11 @@ class AIController {
         error: {},
       });
     } catch (error) {
-      console.error("[AIController getUserSessions Error]:", error.message);
-      return res.status(500).json({
-        success: false,
-        data: {},
-        message: "Failed to retrieve chat sessions",
-        error: error.message,
-      });
+      return next(error);
     }
   }
 
-  async getSessionDetails(req, res) {
+  async getSessionDetails(req, res, next) {
     try {
       const userId = req.user?.id || req.user?._id || req.headers["x-user-id"];
       const { sessionId } = req.params;
@@ -222,17 +184,11 @@ class AIController {
         error: {},
       });
     } catch (error) {
-      console.error("[AIController getSessionDetails Error]:", error.message);
-      return res.status(404).json({
-        success: false,
-        data: {},
-        message: error.message,
-        error: error.message,
-      });
+      return next(error);
     }
   }
 
-  async deleteSession(req, res) {
+  async deleteSession(req, res, next) {
     try {
       const userId = req.user?.id || req.user?._id || req.headers["x-user-id"];
       const { sessionId } = req.params;
@@ -246,13 +202,7 @@ class AIController {
         error: {},
       });
     } catch (error) {
-      console.error("[AIController deleteSession Error]:", error.message);
-      return res.status(404).json({
-        success: false,
-        data: {},
-        message: error.message,
-        error: error.message,
-      });
+      return next(error);
     }
   }
 }

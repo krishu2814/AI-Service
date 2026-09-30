@@ -22,6 +22,10 @@ app.get("/health", (req, res) => {
   });
 });
 
+// Error Handling Middleware
+app.use(require("./middleware/not-found-handler"));
+app.use(require("./middleware/error-handler"));
+
 const startServer = async () => {
   try {
     await connectDB();
